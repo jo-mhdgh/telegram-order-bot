@@ -250,7 +250,10 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if q > 0:
             admin_text += f"{p}: {q}\n"
 
-    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+    try:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+    except Exception as e:
+        print(f"Failed to notify admin: {e}")
 
     # =========================
     # ✅ USER CONFIRMATION
