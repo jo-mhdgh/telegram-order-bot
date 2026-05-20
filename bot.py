@@ -1,3 +1,4 @@
+from keep_alive import keep_alive
 import os
 import sqlite3
 from datetime import datetime, date
@@ -392,6 +393,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT, receive_name))
 
     print("Bot running...")
+    keep_alive()
     app.run_polling()
 
 if __name__ == "__main__":
