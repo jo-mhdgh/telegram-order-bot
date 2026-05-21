@@ -344,11 +344,49 @@ async def export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
+    if context.args:
+        target_date = context.args[0]
+        try:
+            datetime.strptime(target_date, "%Y-%m-%d")
+        except ValueError:
+            await update.message.reply_text("❌ صيغة التاريخ خاطئة. استخدم: /export YYYY-MM-DD")
+            return
+        label = target_date
+    else:
+        target_date = today()
+        label = "اليوم"
+
     cursor.execute("""
     SELECT order_name, username, product, quantity, datetime
     FROM orders
     WHERE DATE(datetime)=?
-    """, (today(),))
+    """, (target_date,))
+
+    rows = cursor.fetchall()
+
+    if not rows:
+        await update.message.reply_text(f"لا يوجد بيانات في {label}")
+        return
+
+    df = pd.DataFrame(rows, columns=["Order Name", "Username", "Product", "Quantity", "Timestamp"])
+    file_name = f"orders_{target_date}.xlsx"
+    df.to_excel(file_name, index=False)
+
+    await update.message.reply_document(open(file_name, "rb"))
+
+# =========================
+# EXPORT ALL
+# =========================
+
+async def export_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    cursor.execute("""
+    SELECT order_name, username, product, quantity, datetime
+    FROM orders
+    ORDER BY datetime
+    """)
 
     rows = cursor.fetchall()
 
@@ -356,14 +394,8 @@ async def export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("لا يوجد بيانات")
         return
 
-    df = pd.DataFrame(rows, columns=[
-    "Order Name",
-    "Username",
-    "Product",
-    "Quantity",
-    "Timestamp"
-])
-    file_name = "orders.xlsx"
+    df = pd.DataFrame(rows, columns=["Order Name", "Username", "Product", "Quantity", "Timestamp"])
+    file_name = "orders_all.xlsx"
     df.to_excel(file_name, index=False)
 
     await update.message.reply_document(open(file_name, "rb"))
@@ -392,6 +424,7 @@ def main():
     app.add_handler(CommandHandler("summary", summary))
     app.add_handler(CommandHandler("details", details))  # 👈 NEW
     app.add_handler(CommandHandler("export", export_excel))
+    app.add_handler(CommandHandler("exportall", export_all))
     app.add_handler(CommandHandler("reset", reset))
 
     app.add_handler(CallbackQueryHandler(button))
