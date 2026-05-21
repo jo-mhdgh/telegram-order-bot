@@ -1,9 +1,13 @@
 from keep_alive import keep_alive
 import os
+import math
 import sqlite3
 from datetime import datetime, date, timezone, timedelta
 from dotenv import load_dotenv
 import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 LOCAL_TZ = timezone(timedelta(hours=3))
 
@@ -337,6 +341,177 @@ async def details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 # =========================
+# EXCEL REPORT BUILDER
+# =========================
+
+def round_up_even(n):
+    return math.ceil(n / 2) * 2
+
+def generate_excel_report(rows, file_name, title="تقرير الطلبات"):
+    wb = Workbook()
+
+    # ── Styles ──────────────────────────────────────────────
+    hdr_fill   = PatternFill("solid", fgColor="1F4E79")
+    grp_fill   = PatternFill("solid", fgColor="2E75B6")
+    sub_fill   = PatternFill("solid", fgColor="D6E4F0")
+    sum_fill   = PatternFill("solid", fgColor="E2EFDA")
+    white_fill = PatternFill("solid", fgColor="FFFFFF")
+    alt_fill   = PatternFill("solid", fgColor="F2F7FB")
+
+    hdr_font  = Font(bold=True, color="FFFFFF", size=11)
+    grp_font  = Font(bold=True, color="FFFFFF", size=11)
+    sub_font  = Font(bold=True, color="1F4E79", size=10)
+    body_font = Font(size=10)
+    title_font= Font(bold=True, size=14, color="1F4E79")
+
+    thin = Side(style="thin", color="BDD7EE")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center")
+    left   = Alignment(horizontal="left",   vertical="center")
+
+    # ── Sheet 1: Detailed Orders ─────────────────────────────
+    ws = wb.active
+    ws.title = "الطلبات التفصيلية"
+    ws.sheet_view.rightToLeft = True
+
+    # Title row
+    ws.merge_cells("A1:E1")
+    ws["A1"] = title
+    ws["A1"].font = title_font
+    ws["A1"].alignment = center
+    ws.row_dimensions[1].height = 28
+
+    # Header row
+    headers = ["الاسم", "المستخدم", "المنتج", "الكمية (معدّلة)", "الوقت"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=2, column=col, value=h)
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = center
+        cell.border = border
+    ws.row_dimensions[2].height = 20
+
+    # Group rows by order_name
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for order_name, username, product, quantity, dt in rows:
+        groups[order_name].append((username, product, quantity, dt))
+
+    current_row = 3
+    product_totals = defaultdict(int)
+
+    for idx, (order_name, items) in enumerate(groups.items()):
+        # Group header
+        ws.merge_cells(f"A{current_row}:E{current_row}")
+        cell = ws.cell(row=current_row, column=1, value=f"  {order_name}")
+        cell.font = grp_font
+        cell.fill = grp_fill
+        cell.alignment = left
+        cell.border = border
+        ws.row_dimensions[current_row].height = 18
+        current_row += 1
+
+        group_totals = defaultdict(int)
+        for i, (username, product, quantity, dt) in enumerate(items):
+            adj_qty = round_up_even(quantity)
+            product_totals[product] += adj_qty
+            group_totals[product] += adj_qty
+
+            fill = white_fill if i % 2 == 0 else alt_fill
+            values = [order_name, f"@{username}", product, adj_qty, dt]
+            for col, val in enumerate(values, 1):
+                cell = ws.cell(row=current_row, column=col, value=val)
+                cell.font = body_font
+                cell.fill = fill
+                cell.alignment = center if col != 1 else left
+                cell.border = border
+            current_row += 1
+
+        # Subtotal row per group
+        ws.merge_cells(f"A{current_row}:B{current_row}")
+        sub_label = ws.cell(row=current_row, column=1, value="المجموع الفرعي")
+        sub_label.font = sub_font
+        sub_label.fill = sub_fill
+        sub_label.alignment = center
+        sub_label.border = border
+        ws.cell(row=current_row, column=2).fill = sub_fill
+        ws.cell(row=current_row, column=2).border = border
+
+        products_str = "  |  ".join(f"{p}: {q}" for p, q in group_totals.items())
+        total_qty = sum(group_totals.values())
+
+        prod_cell = ws.cell(row=current_row, column=3, value=products_str)
+        prod_cell.font = sub_font
+        prod_cell.fill = sub_fill
+        prod_cell.alignment = left
+        prod_cell.border = border
+
+        qty_cell = ws.cell(row=current_row, column=4, value=total_qty)
+        qty_cell.font = sub_font
+        qty_cell.fill = sub_fill
+        qty_cell.alignment = center
+        qty_cell.border = border
+
+        ws.cell(row=current_row, column=5).fill = sub_fill
+        ws.cell(row=current_row, column=5).border = border
+        ws.row_dimensions[current_row].height = 18
+        current_row += 2  # blank gap between groups
+
+    # Column widths
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 18
+    ws.column_dimensions["E"].width = 20
+
+    # ── Sheet 2: Grand Summary ───────────────────────────────
+    ws2 = wb.create_sheet("ملخص الكميات")
+    ws2.sheet_view.rightToLeft = True
+
+    ws2.merge_cells("A1:B1")
+    ws2["A1"] = "ملخص إجمالي للكميات"
+    ws2["A1"].font = title_font
+    ws2["A1"].alignment = center
+    ws2.row_dimensions[1].height = 28
+
+    for col, h in enumerate(["المنتج", "الكمية الإجمالية"], 1):
+        cell = ws2.cell(row=2, column=col, value=h)
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = center
+        cell.border = border
+    ws2.row_dimensions[2].height = 20
+
+    grand_total = 0
+    for i, (product, total) in enumerate(product_totals.items()):
+        fill = white_fill if i % 2 == 0 else alt_fill
+        ws2.cell(row=3+i, column=1, value=product).fill = fill
+        ws2.cell(row=3+i, column=1).font = body_font
+        ws2.cell(row=3+i, column=1).alignment = center
+        ws2.cell(row=3+i, column=1).border = border
+        ws2.cell(row=3+i, column=2, value=total).fill = fill
+        ws2.cell(row=3+i, column=2).font = body_font
+        ws2.cell(row=3+i, column=2).alignment = center
+        ws2.cell(row=3+i, column=2).border = border
+        grand_total += total
+
+    total_row = 3 + len(product_totals)
+    ws2.cell(row=total_row, column=1, value="الإجمالي الكلي").font = Font(bold=True, size=11, color="1F4E79")
+    ws2.cell(row=total_row, column=1).fill = sum_fill
+    ws2.cell(row=total_row, column=1).alignment = center
+    ws2.cell(row=total_row, column=1).border = border
+    ws2.cell(row=total_row, column=2, value=grand_total).font = Font(bold=True, size=11, color="1F4E79")
+    ws2.cell(row=total_row, column=2).fill = sum_fill
+    ws2.cell(row=total_row, column=2).alignment = center
+    ws2.cell(row=total_row, column=2).border = border
+    ws2.row_dimensions[total_row].height = 20
+
+    ws2.column_dimensions["A"].width = 22
+    ws2.column_dimensions["B"].width = 22
+
+    wb.save(file_name)
+
+# =========================
 # EXPORT
 # =========================
 
@@ -368,9 +543,8 @@ async def export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"لا يوجد بيانات في {label}")
         return
 
-    df = pd.DataFrame(rows, columns=["Order Name", "Username", "Product", "Quantity", "Timestamp"])
     file_name = f"orders_{target_date}.xlsx"
-    df.to_excel(file_name, index=False)
+    generate_excel_report(rows, file_name, title=f"تقرير الطلبات — {target_date}")
 
     await update.message.reply_document(open(file_name, "rb"))
 
@@ -394,9 +568,8 @@ async def export_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("لا يوجد بيانات")
         return
 
-    df = pd.DataFrame(rows, columns=["Order Name", "Username", "Product", "Quantity", "Timestamp"])
     file_name = "orders_all.xlsx"
-    df.to_excel(file_name, index=False)
+    generate_excel_report(rows, file_name, title="تقرير جميع الطلبات")
 
     await update.message.reply_document(open(file_name, "rb"))
 
