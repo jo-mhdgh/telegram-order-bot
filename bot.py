@@ -1,9 +1,11 @@
 from keep_alive import keep_alive
 import os
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from dotenv import load_dotenv
 import pandas as pd
+
+LOCAL_TZ = timezone(timedelta(hours=3))
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -74,11 +76,11 @@ waiting_for_name = {}
 # =========================
 
 def is_open():
-    now = datetime.now().hour
+    now = datetime.now(LOCAL_TZ).hour
     return OPEN_HOUR <= now < CLOSE_HOUR
 
 def today():
-    return date.today().isoformat()
+    return datetime.now(LOCAL_TZ).date().isoformat()
 
 # =========================
 # KEYBOARD
